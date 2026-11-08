@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="ja"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Dynamic Triangular Life</title>
+<style>
+:root{--bg:#f6f6f3;--fg:#1d1d1b;--mut:#6b6b66;--card:#fff;--bd:#d8d8d2;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#17171a;--fg:#ececea;--mut:#9a9a94;--card:#222226;--bd:#3a3a40}}
+:root[data-theme="dark"]{--bg:#17171a;--fg:#ececea;--mut:#9a9a94;--card:#222226;--bd:#3a3a40}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 system-ui,-apple-system,"Hiragino Sans","Noto Sans JP",sans-serif;padding:12px}
+h1{font-size:17px;margin:0 0 8px}
+canvas{max-width:100%;height:auto;background:var(--card);border:1px solid var(--bd);border-radius:8px;display:block}
+.row{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0}
+button{background:var(--card);color:var(--fg);border:1px solid var(--bd);border-radius:6px;padding:6px 12px;font:inherit;cursor:pointer}
+.sl{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:4px 14px}
+.sl label{display:flex;justify-content:space-between;color:var(--mut);font-size:12px}.sl input{width:100%}
+pre{background:var(--card);border:1px solid var(--bd);border-radius:6px;padding:8px;font-size:12px;margin:0;overflow-x:auto}
+textarea{width:100%;height:150px;font:12px monospace;background:var(--card);color:var(--fg);border:1px solid var(--bd);border-radius:6px;box-sizing:border-box}
+small{color:var(--mut)}
+</style></head><body>
+<h1>Dynamic Triangular Life</h1>
+<canvas id="c" width="640" height="400"></canvas>
+<div class="row"><button id="play">▶ 再生</button><button id="stp">1ステップ</button><button id="rst">リセット</button><button id="app">ルールJSONを適用して初期化</button><label style="align-self:center"><input type="checkbox" id="sh"> エネルギーを明暗で表示</label></div>
+<div class="sl" id="sl"></div>
+<div class="row"><pre id="info" style="flex:1;min-width:260px"></pre></div>
+<small>ルール（W: 相互作用行列 / R: 状態変化条件 / BR: 誕生ルール［親状態×隣接親状態→子の状態］）。値はすべて仮の初期値です。</small>
+<textarea id="cfg"></textarea>
+<script>
+const $=i=>document.getElementById(i),clamp=(x,a,b)=>x<a?a:x>b?b:x;
+const P={k:.25,dm:1,kh:.01,kb:.3,bA:1,col:.3,spf:1,emax:6,ks:1,Amin:.35,Amax:2.2,hs:.05};
+let CFG={
+ // 行=自分(A富豪,B奴隷,C家畜,D植物) 列=隣(A,B,C,D,穴)
+ W:[[0,.2,0,0,0],[-.08,0,.2,.2,0],[0,.04,.03,.35,0],[0,-.1,-.2,0,0]],
+ g:[-.08,-.05,-.08,.22],dec:[.01,.01,.01,.02],bE:[4.5,3.5,4.5,4],dE:[4,4,4,4],cost:[3,2.5,3,3],
+ R:[{f:0,t:1,emax:-2.5,nb:1,n:0,nmax:0},{f:1,t:0,emin:3.5,nb:1,n:2},{f:1,t:2,emax:-1.5,nb:0,n:2}],
+ BR:[[0,1,0,0],[1,1,1,1],[2,2,2,2],[3,3,3,3]]};
+let V,T,A0,L0,N=0,run=false,tot,info={};
+const area=t=>{const a=V[t.v[0]],b=V[t.v[1]],c=V[t.v[2]];return .5*((b.x-a.x)*(c.y-a.y)-(b.y-a.y)*(c.x-a.x))};
+const tgt=t=>t.h?A0*P.hs:clamp(A0*Math.exp(P.k*t.e),A0*P.Amin,A0*P.Amax);
+// 決定論的ハッシュ（乱数ではなく添字のみで決まる）
+const hash=(i,j)=>{const x=Math.sin(i*12.9898+j*78.233)*43758.5453;return x-Math.floor(x)-.5};
+function init(){
+ V=[];T=[];N=0;tot={b:0,d:0,c:0,f:0,r:0};
+ const C=26,R=18,s=22,h=s*.866,ox=30,oy=30;A0=Math.sqrt(3)/4*s*s;L0=s;
+ for(let j=0;j<R;j++)for(let i=0;i<C;i++){
+  const f=i==0||j==0||i==C-1||j==R-1,x=ox+i*s+(j&1?s/2:0)+(f?0:hash(i,j)*.24*s),y=oy+j*h+(f?0:hash(j,i)*.24*s);
+  V.push({x,y,hx:x,hy:y,fixed:f});}
+ const id=(i,j)=>j*C+i,add=(a,b,c)=>T.push({v:[a,b,c],s:0,e:0,h:0});
+ for(let j=0;j<R-1;j++)for(let i=0;i<C-1;i++){
+  if(!(j&1)){add(id(i,j),id(i+1,j),id(i,j+1));add(id(i+1,j),id(i+1,j+1),id(i,j+1));}
+  else{add(id(i,j),id(i+1,j+1),id(i,j+1));add(id(i,j),id(i+1,j),id(i+1,j+1));}}
+ const mx=ox+(C-1)*s/2+s/4,my=oy+(R-1)*h/2,pat=[2,2,2,2,2,3,3,3,3,3,3,3,3,3,3,1,1,1,0];
+ const ds=T.map((t,i)=>{const a=V[t.v[0]],b=V[t.v[1]],c=V[t.v[2]];return[Math.hypot((a.x+b.x+c.x)/3-mx,(a.y+b.y+c.y)/3-my),i]}).sort((p,q)=>p[0]-q[0]||p[1]-q[1]).slice(0,19);
+ const mp=new Map(),nv=[];
+ T=ds.map(([,i],r)=>({v:T[i].v.map(u=>{if(!mp.has(u)){mp.set(u,nv.length);const o=V[u];nv.push({x:o.x,y:o.y,hx:o.x,hy:o.y,fixed:false})}return mp.get(u)}),s:pat[r],e:0,h:0}));V=nv;
+ build();draw();stats();
+}
+// 有向辺マップから隣接を構築。同じ向きの辺が2回出たら整合性エラーとして数える
+function build(){const M=new Map();let bad=0;
+ T.forEach((t,i)=>{for(let k=0;k<3;k++){const key=t.v[k]*1e6+t.v[(k+1)%3];if(M.has(key))bad++;M.set(key,i);}});
+ T.forEach(t=>{t.n=[0,1,2].map(k=>{const r=M.get(t.v[(k+1)%3]*1e6+t.v[k]);return r===undefined?-1:r});});
+ info.bad=bad;return M}
+function energy(){ // 同期更新：旧状態のみ参照
+ T.forEach(t=>{if(t.h){t.ne=0;return}let e=t.e*(1-CFG.dec[t.s]*P.dm)+CFG.g[t.s];
+  for(const j of t.n)if(j>=0)e+=CFG.W[t.s][T[j].h?4:T[j].s];t.ne=clamp(e,-P.emax,P.emax)});
+ T.forEach(t=>{t.ns=t.s;if(t.h)return;
+  for(const r of CFG.R){if(r.f!==t.s)continue;if(r.emin!==undefined&&t.ne<r.emin)continue;if(r.emax!==undefined&&t.ne>r.emax)continue;
+   let c=0;for(const j of t.n)if(j>=0&&!T[j].h&&T[j].s===r.nb)c++;if(c<(r.n||0)||c>(r.nmax===undefined?9:r.nmax))continue;t.ns=r.t;break}});
+ T.forEach(t=>{t.e=t.ne;t.s=t.ns});
+}
+function split(i,k,tc){
+ const p=T[i],j=p.n[k],q=T[j],a=p.v[k],b=p.v[(k+1)%3],c=p.v[(k+2)%3];let d=-1;
+ for(let m=0;m<3;m++)if(q.v[m]===b&&q.v[(m+1)%3]===a)d=q.v[(m+2)%3];
+ if(d<0)return;
+ const x=(V[a].x+V[b].x)/2,y=(V[a].y+V[b].y)/2,m=V.length;V.push({x,y,hx:x,hy:y,fixed:false});
+ const child={v:[m,b,c],s:CFG.BR[p.s][q.s],e:CFG.cost[p.s]/2,h:0},qc={v:[m,a,d],s:q.s,e:q.e,h:0};
+ p.v=[a,m,c];p.e-=CFG.cost[p.s];q.v=[b,m,d];T.push(child,qc);tc.add(i);tc.add(j);tot.b++;
+}
+function events(){
+ const tc=new Set(),n0=T.length;
+ for(let i=0;i<n0;i++){const t=T[i];if(!t.h&&t.e<=-CFG.dE[t.s]){t.h=1;t.e=0;tc.add(i);tot.d++}}
+ for(let i=0;i<n0&&T.length<2500;i++){const t=T[i];if(t.h||tc.has(i)||t.e<CFG.bE[t.s]||area(t)<P.bA*A0)continue;
+  let bk=-1,bl=-1;
+  for(let k=0;k<3;k++){const j=t.n[k];if(j<0||T[j].h||tc.has(j))continue;
+   const a=V[t.v[k]],b=V[t.v[(k+1)%3]],l=Math.hypot(a.x-b.x,a.y-b.y);if(l>bl+1e-9){bl=l;bk=k}}
+  if(bk>=0)split(i,bk,tc);}
+}
+function collapse(a,b){
+ const va=V[a],vb=V[b],ds=new Set(),bdv=new Set();
+ for(const t of T){if(t.dead)continue;for(let k=0;k<3;k++)ds.add(t.v[k]*1e6+t.v[(k+1)%3])}
+ for(const t of T){if(t.dead)continue;for(let k=0;k<3;k++){const x=t.v[k],y=t.v[(k+1)%3];if(!ds.has(y*1e6+x)){bdv.add(x);bdv.add(y)}}}
+ if(bdv.has(a)&&bdv.has(b))return false;
+ const inc=[],rem=[],Na=new Set(),Nb=new Set();
+ for(const t of T){if(t.dead)continue;const ha=t.v.includes(a),hb=t.v.includes(b);
+  if(ha)t.v.forEach(v=>Na.add(v));if(hb)t.v.forEach(v=>Nb.add(v));
+  if(ha&&hb)rem.push(t);else if(ha||hb)inc.push(t)}
+ if(rem.length!==2)return false;
+ const opp=new Set();rem.forEach(t=>t.v.forEach(v=>{if(v!==a&&v!==b)opp.add(v)}));
+ let com=0;Na.forEach(v=>{if(v!==a&&v!==b&&Nb.has(v)){com++;if(!opp.has(v))com=99}});
+ if(com!==2)return false;                         // リンク条件
+ const keep=bdv.has(b)?b:a,go=keep===a?b:a,K=V[keep],G=V[go],isB=bdv.has(keep);
+ const px=isB?K.x:(K.x+G.x)/2,py=isB?K.y:(K.y+G.y)/2;
+ for(const t of inc){const w=t.v.map(v=>v===go?keep:v).map(v=>v===keep?{x:px,y:py}:V[v]);
+  if(.5*((w[1].x-w[0].x)*(w[2].y-w[0].y)-(w[1].y-w[0].y)*(w[2].x-w[0].x))<=(t.h?-1e-9:Math.min(.1*A0,.5*area(t))))return false}
+ inc.forEach(t=>{t.v=t.v.map(v=>v===go?keep:v)});rem.forEach(t=>t.dead=1);
+ if(!isB){K.x=px;K.y=py;K.hx=(K.hx+G.hx)/2;K.hy=(K.hy+G.hy)/2}
+ return true}
+function collapseHoles(){
+ for(let i=0;i<T.length;i++){const t=T[i];if(!t.h||t.dead)continue;
+  const es=[0,1,2].map(k=>{const u=t.v[k],w=t.v[(k+1)%3],a=V[u],b=V[w],l=Math.hypot(a.x-b.x,a.y-b.y),o=l<P.col*L0?T.find(q=>q!==t&&!q.dead&&q.v.includes(u)&&q.v.includes(w)):null;return{k,l,hh:o&&o.h?0:1}}).filter(e=>e.l<P.col*L0).sort((x,y)=>x.hh-y.hh||x.l-y.l||x.k-y.k);
+  for(const e of es){if(collapse(t.v[e.k],t.v[(e.k+1)%3])){tot.c++;break}}}
+ T=T.filter(t=>!t.dead)}
+function flips(){ // 価数が6から離れすぎないよう、二乗偏差が減る辺だけ反転
+ const M=build(),val=new Int16Array(V.length),tc=new Set();T.forEach(t=>t.v.forEach(v=>val[v]++));
+ const bd=new Set();T.forEach(t=>t.n.forEach((j,k)=>{if(j<0){bd.add(t.v[k]);bd.add(t.v[(k+1)%3])}}));
+ for(let i=0;i<T.length;i++){if(tc.has(i))continue;const t=T[i];
+  for(let k=0;k<3;k++){const j=t.n[k];if(j<=i||tc.has(j))continue;const q=T[j];
+   const a=t.v[k],b=t.v[(k+1)%3],c=t.v[(k+2)%3];let d=-1;
+   for(let m=0;m<3;m++)if(q.v[m]===b&&q.v[(m+1)%3]===a)d=q.v[(m+2)%3];
+   if(d<0||(bd.has(a)&&bd.has(b)))continue;
+   const f=(v,x)=>bd.has(v)?(x-4)*(x-4)*.3:(x-6)*(x-6);
+   if(f(a,val[a]-1)+f(b,val[b]-1)+f(c,val[c]+1)+f(d,val[d]+1)>=f(a,val[a])+f(b,val[b])+f(c,val[c])+f(d,val[d]))continue;
+   if(M.has(c*1e6+d)||M.has(d*1e6+c))continue;
+   const o=T.slice(),A=[a,d,c],B=[d,b,c],ar2=w=>{const p=V[w[0]],q2=V[w[1]],r=V[w[2]];return .5*((q2.x-p.x)*(r.y-p.y)-(q2.y-p.y)*(r.x-p.x))};
+   if(ar2(A)<=A0*.12||ar2(B)<=A0*.12)continue;
+   t.v=A;q.v=B;val[a]--;val[b]--;val[c]++;val[d]++;tc.add(i);tc.add(j);tot.f++;break}}
+}
+function relax(dt=.08){
+ for(let s=0;s<6;s++){
+  V.forEach(v=>{v.ox=v.x;v.oy=v.y;const q=v.fixed?P.kb:P.kh;v.fx=q*(v.hx-v.x);v.fy=q*(v.hy-v.y)});
+  for(const t of T){const L=Math.sqrt(4*tgt(t)/1.7320508);
+   for(let k=0;k<3;k++){const a=V[t.v[k]],b=V[t.v[(k+1)%3]],dx=b.x-a.x,dy=b.y-a.y,l=Math.hypot(dx,dy)||1e-9,f=P.ks*(l-L)/l;
+    a.fx+=f*dx;a.fy+=f*dy;b.fx-=f*dx;b.fy-=f*dy}}
+  const mx=.15*L0;
+  V.forEach(v=>{let dx=dt*v.fx,dy=dt*v.fy;const m=Math.hypot(dx,dy);if(m>mx){dx*=mx/m;dy*=mx/m}v.dx=dx;v.dy=dy});
+  let ok=false;for(const sc of [1,.5,.25,.1]){V.forEach(v=>{v.x=v.ox+v.dx*sc;v.y=v.oy+v.dy*sc});if(!T.some(t=>area(t)<(t.h?-1e-3:-1e-9))){ok=true;break}}
+  if(!ok){tot.r++;const inc=V.map(()=>[]);T.forEach(t=>t.v.forEach(u=>inc[u].push(t)));V.forEach(v=>{v.x=v.ox;v.y=v.oy});V.forEach((v,i)=>{for(const sc of [1,.5,.25,0]){v.x=v.ox+v.dx*sc;v.y=v.oy+v.dy*sc;if(!inc[i].some(t=>area(t)<(t.h?-1e-3:-1e-9)))break}})}}
+}
+function step(){
+ build();energy();events();collapseHoles();if(N%3===0)flips();relax();N++;
+}
+function stats(){
+ build();const live=T.filter(t=>!t.h),cnt=[0,0,0,0];live.forEach(t=>cnt[t.s]++);
+ const val=new Int16Array(V.length);T.forEach(t=>t.v.forEach(v=>val[v]++));
+ const hist={};V.forEach((v,i)=>{if(val[i]&&!v.fixed)hist[val[i]]=(hist[val[i]]||0)+1});
+ const minA=Math.min(...T.map(area)),inv=T.filter(t=>area(t)<-1e-3).length;
+ $("info").textContent=`step ${N}  三角形 ${T.length}（生存 ${live.length} / 穴 ${T.length-live.length}）\n富豪A ${cnt[0]}  奴隷B ${cnt[1]}  家畜C ${cnt[2]}  植物D ${cnt[3]}\n累計 誕生 ${tot.b}  消滅 ${tot.d}  穴の崩壊 ${tot.c}  辺反転 ${tot.f}  巻き戻し ${tot.r}\n内部頂点の価数分布 ${Object.keys(hist).sort().map(k=>k+":"+hist[k]).join(" ")}\n整合性: 有向辺の重複 ${info.bad}  裏返り ${inv}  最小面積 ${minA.toFixed(2)}`;
+}
+const cv=$("c"),g=cv.getContext("2d"),HUE=[48,215,15,130];
+function draw(){
+ g.setTransform(1,0,0,1,0,0);g.clearRect(0,0,cv.width,cv.height);if(!T.length)return;
+ let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9;for(const t of T)for(const u of t.v){const p=V[u];x0=Math.min(x0,p.x);y0=Math.min(y0,p.y);x1=Math.max(x1,p.x);y1=Math.max(y1,p.y)}
+ const sc=Math.min(3,(cv.width-40)/Math.max(x1-x0,1),(cv.height-40)/Math.max(y1-y0,1));
+ g.setTransform(sc,0,0,sc,cv.width/2-sc*(x0+x1)/2,cv.height/2-sc*(y0+y1)/2);g.lineWidth=.6/sc;g.strokeStyle="rgba(0,0,0,.35)";
+ for(const t of T){const a=V[t.v[0]],b=V[t.v[1]],c=V[t.v[2]];g.beginPath();g.moveTo(a.x,a.y);g.lineTo(b.x,b.y);g.lineTo(c.x,c.y);g.closePath();
+  g.fillStyle=t.h?"#111":`hsl(${HUE[t.s]},65%,${$("sh").checked?clamp(50+t.e*6,20,82):50}%)`;g.fill();g.stroke()}
+}
+function frame(){if(run){for(let i=0;i<P.spf;i++)step();draw();stats();requestAnimationFrame(frame)}}
+const SL=[["k","面積係数 k",0,.6,.01],["dm","減衰の倍率",0,3,.05],["kh","復元力",0,.2,.005],["kb","端の固さ",0,1,.01],["bA","増殖に必要な面積(対A0)",.3,2,.05],["col","穴の崩壊長",.05,.6,.01],["spf","速度",1,5,1]];
+$("sl").innerHTML=SL.map(([k,n,a,b,s])=>`<div><label>${n}<span id="v${k}">${P[k]}</span></label><input type="range" min="${a}" max="${b}" step="${s}" value="${P[k]}" data-k="${k}"></div>`).join("");
+document.querySelectorAll("#sl input").forEach(e=>e.oninput=()=>{P[e.dataset.k]=+e.value;$("v"+e.dataset.k).textContent=e.value});
+$("play").onclick=()=>{run=!run;$("play").textContent=run?"⏸ 一時停止":"▶ 再生";if(run)frame()};
+$("stp").onclick=()=>{step();draw();stats()};
+$("rst").onclick=()=>{init()};$("sh").onchange=draw;
+$("app").onclick=()=>{try{const c=JSON.parse($("cfg").value);if(!c.W||!c.R||!c.BR)throw 0;CFG=c;init()}catch(e){alert("JSONの形式が正しくありません")}};
+$("cfg").value=JSON.stringify(CFG);
+init();
+</script></body></html>
